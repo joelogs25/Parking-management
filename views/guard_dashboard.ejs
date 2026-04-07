@@ -173,7 +173,7 @@
   <section class="panel">
     <div class="section-head">
       <h2>Current Occupancy</h2>
-      <p>
+      <p id="guardOccupancySummary">
         <%= summary.available || 0 %> available |
         <%= summary.occupied || 0 %> occupied |
         <%= summary.disabled || 0 %> disabled |
@@ -192,7 +192,7 @@
             <th>Status</th>
           </tr>
         </thead>
-        <tbody>
+        <tbody id="guardOccupancyTableBody">
           <% if (!safeInsideVehicles.length) { %>
             <tr>
               <td colspan="6">
@@ -361,6 +361,8 @@
     const guardVisitorPending = document.getElementById("guardVisitorPending");
     const guardVisitorExpired = document.getElementById("guardVisitorExpired");
     const guardVisitorInside = document.getElementById("guardVisitorInside");
+    const guardOccupancySummary = document.getElementById("guardOccupancySummary");
+    const guardOccupancyTableBody = document.getElementById("guardOccupancyTableBody");
 
     const guardEntryModal = document.getElementById("guardEntryModal");
     const guardEntryCloseBtn = document.getElementById("guardEntryCloseBtn");
@@ -391,6 +393,7 @@
     let alertsRefreshTimer = null;
     let notificationEventSource = null;
     let notificationReconnectTimer = null;
+    let occupancyRefreshTimer = null;
 
     function escapeHtml(value) {
       return String(value == null ? "" : value)
@@ -436,6 +439,100 @@
       if (hours < 24) return `${hours}h ago`;
       const days = Math.floor(hours / 24);
       return `${days}d ago`;
+    }
+
+    function renderOccupancyTableRows(rows) {
+      if (!guardOccupancyTableBody) return;
+      if (!Array.isArray(rows) || !rows.length) {
+        guardOccupancyTableBody.innerHTML = `
+          <tr>
+            <td colspan="6">
+              <div class="empty-state">
+                <p>No vehicles currently inside.</p>
+              </div>
+            </td>
+          </tr>
+        `;
+        return;
+      }
+
+      guardOccupancyTableBody.innerHTML = rows.map((item) => `
+        <tr>
+          <td>
+            <strong>${escapeHtml(item.full_name || "-")}</strong><br />
+            <small>${escapeHtml(item.student_number || "-")}</small>
+          </td>
+          <td>${escapeHtml(item.plate_number || "-")}</td>
+          <td>${escapeHtml(item.parking_slot || "-")}</td>
+          <td>${escapeHtml(item.entry_gate || "-")}</td>
+          <td>${escapeHtml(item.duration_label || "-")}</td>
+          <td>${item.is_overstay ? '<span class="badge badge-overstay">Overstay</span>' : '<span class="badge badge-inside">Inside</span>'}</td>
+        </tr>
+      `).join("");
+    }
+
+    function renderOccupancyError(message) {
+      if (!guardOccupancyTableBody) return;
+      guardOccupancyTableBody.innerHTML = `
+        <tr>
+          <td colspan="6">
+            <div class="empty-state">
+              <p>${escapeHtml(message || "Unable to load current occupancy.")}</p>
+            </div>
+          </td>
+        </tr>
+      `;
+    }
+
+    async function fetchCurrentOccupancy({ silent = false } = {}) {
+      if (!guardOccupancyTableBody) return;
+      if (!silent && !guardOccupancyTableBody.children.length) {
+        renderOccupancyError("Loading current occupancy...");
+      }
+
+      try {
+        const [insideResp, slotResp] = await Promise.all([
+          fetch("/api/inside-vehicles", {
+            credentials: "same-origin",
+            cache: "no-store"
+          }),
+          fetch("/api/parking-slot-overview", {
+            credentials: "same-origin",
+            cache: "no-store"
+          })
+        ]);
+
+        const insideData = await insideResp.json().catch(() => ({ ok: false, message: "Invalid server response." }));
+        if (!insideResp.ok || !insideData.ok) {
+          throw new Error(insideData.message || `Unable to load occupancy (${insideResp.status})`);
+        }
+        const rows = Array.isArray(insideData.insideVehicles) ? insideData.insideVehicles : [];
+        renderOccupancyTableRows(rows);
+
+        if (guardOccupancySummary) {
+          const slotData = await slotResp.json().catch(() => ({ ok: false }));
+          if (slotResp.ok && slotData.ok && slotData.summary) {
+            const summary = slotData.summary || {};
+            guardOccupancySummary.textContent = `${summary.available || 0} available | ${summary.occupied || 0} occupied | ${summary.disabled || 0} disabled | ${summary.total || 0} total`;
+          } else {
+            guardOccupancySummary.textContent = `${rows.length} currently inside`;
+          }
+        }
+      } catch (error) {
+        if (!silent) {
+          renderOccupancyError(error.message || "Unable to load current occupancy.");
+        } else {
+          console.warn("Occupancy refresh warning:", error.message);
+        }
+      }
+    }
+
+    function scheduleOccupancyRefresh(delayMs = 180) {
+      if (occupancyRefreshTimer) return;
+      occupancyRefreshTimer = window.setTimeout(async () => {
+        occupancyRefreshTimer = null;
+        await fetchCurrentOccupancy({ silent: true });
+      }, Math.max(60, Number(delayMs) || 180));
     }
 
     function applyHealthState(payload) {
@@ -689,6 +786,7 @@
         if (isLiveConnected) return;
         fetchPendingEntries({ silent: true });
         fetchQueueHealth({ silent: true });
+        fetchCurrentOccupancy({ silent: true });
       }, 10000);
     }
 
@@ -757,16 +855,19 @@
 
       source.addEventListener("pending-entry-created", () => {
         scheduleQueueRefresh(60);
+        scheduleOccupancyRefresh(90);
         scheduleAlertRefresh(80);
       });
 
       source.addEventListener("pending-entry-updated", () => {
         scheduleQueueRefresh(80);
+        scheduleOccupancyRefresh(120);
         scheduleAlertRefresh(110);
       });
 
       source.addEventListener("pending-entry-sync", () => {
         scheduleQueueRefresh(100);
+        scheduleOccupancyRefresh(140);
       });
 
       source.addEventListener("error", () => {
@@ -1077,7 +1178,10 @@
 
         showLiveAlert(`ENTRY confirmed for ${data.sticker?.plate_number || "vehicle"} at ${data.parking_slot || "-"}.`, "success", 5200);
         closeGuardEntryModal();
-        await fetchPendingEntries({ silent: true });
+        await Promise.all([
+          fetchPendingEntries({ silent: true }),
+          fetchCurrentOccupancy({ silent: true })
+        ]);
       } catch (error) {
         guardEntryHint.textContent = error.message || "Unable to confirm entry.";
         guardEntryConfirmBtn.disabled = false;
@@ -1104,7 +1208,10 @@
         }
         showLiveAlert("Pending request cancelled.", "warning", 4200);
         closeGuardEntryModal();
-        await fetchPendingEntries({ silent: true });
+        await Promise.all([
+          fetchPendingEntries({ silent: true }),
+          fetchCurrentOccupancy({ silent: true })
+        ]);
       } catch (error) {
         guardEntryHint.textContent = error.message || "Unable to cancel request.";
         guardEntryConfirmBtn.disabled = false;
@@ -1115,6 +1222,7 @@
     queueRefreshBtn?.addEventListener("click", () => {
       fetchPendingEntries({ silent: false });
       fetchQueueHealth({ silent: false });
+      fetchCurrentOccupancy({ silent: false });
       fetchGuardAlerts({ silent: false });
       fetchGuardAlertSummary();
       fetchVisitorPassSummary();
@@ -1147,12 +1255,17 @@
         clearTimeout(alertsRefreshTimer);
         alertsRefreshTimer = null;
       }
+      if (occupancyRefreshTimer) {
+        clearTimeout(occupancyRefreshTimer);
+        occupancyRefreshTimer = null;
+      }
     });
     document.addEventListener("visibilitychange", () => {
       if (document.hidden) return;
       if (!isLiveConnected) {
         fetchPendingEntries({ silent: true });
         fetchQueueHealth({ silent: true });
+        fetchCurrentOccupancy({ silent: true });
         connectLiveEvents();
       }
       if (!notificationEventSource) {
@@ -1162,12 +1275,14 @@
 
     fetchPendingEntries({ silent: false });
     fetchQueueHealth({ silent: false });
+    fetchCurrentOccupancy({ silent: false });
     fetchGuardAlerts({ silent: false });
     fetchGuardAlertSummary();
     fetchVisitorPassSummary();
     connectLiveEvents();
     connectNotificationEvents();
     setInterval(() => {
+      fetchCurrentOccupancy({ silent: true });
       fetchGuardAlerts({ silent: true });
       fetchGuardAlertSummary();
       fetchVisitorPassSummary();
