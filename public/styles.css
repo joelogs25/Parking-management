@@ -3323,9 +3323,23 @@ body.page-transitioning .app-shell {
 }
 
 .btn-sm.danger {
-  border-color: var(--red-border);
-  background: var(--red-soft);
-  color: var(--red-text);
+  border: 1px solid #9f1239;
+  background: linear-gradient(135deg, #e11d48, #be123c);
+  color: #fff;
+  text-shadow: 0 1px 0 rgba(2, 6, 23, 0.22);
+}
+
+.btn-sm.danger:hover,
+.btn-sm.danger:focus-visible {
+  background: linear-gradient(135deg, #be123c, #9f1239);
+  color: #fff;
+  text-decoration: none;
+}
+
+.btn-sm.danger:focus-visible {
+  outline: 2px solid rgba(190, 18, 60, 0.35);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px rgba(190, 18, 60, 0.18);
 }
 
 .scan-info-popup .slot-history-backdrop {
@@ -3469,9 +3483,15 @@ body.page-transitioning .app-shell {
 }
 
 [data-theme="dark"] .btn-sm.danger {
-  border-color: rgba(252, 165, 165, 0.45);
-  color: #fecdd3;
-  background: rgba(190, 18, 60, 0.25);
+  border-color: rgba(251, 113, 133, 0.7);
+  color: #fff;
+  background: linear-gradient(135deg, rgba(244, 63, 94, 0.92), rgba(190, 18, 60, 0.92));
+}
+
+[data-theme="dark"] .btn-sm.danger:hover,
+[data-theme="dark"] .btn-sm.danger:focus-visible {
+  background: linear-gradient(135deg, rgba(225, 29, 72, 0.95), rgba(159, 18, 57, 0.95));
+  color: #fff;
 }
 
 .auto-gate-shell {
